@@ -257,6 +257,10 @@ def NonnullGlobalConstantsChecker: Checker<"NonnilStringConstants">,
   Documentation<NotDocumented>,
   Hidden;
 
+def PyCExnChecker : Checker<"PyCExnChecker">,
+  HelpText<"Exceptional analysis in the Python/C API">,
+  Documentation<NotDocumented>;
+
 } // end "core"
 
 let ParentPackage = CoreAlpha in {

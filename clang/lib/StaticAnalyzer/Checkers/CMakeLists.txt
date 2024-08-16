@@ -140,6 +140,8 @@ add_clang_library(clangStaticAnalyzerCheckers
   WebKit/UncountedLambdaCapturesChecker.cpp
   WebKit/UncountedLocalVarsChecker.cpp
 
+  PyCExnChecker.cpp
+
   LINK_LIBS
   clangAST
   clangASTMatchers
