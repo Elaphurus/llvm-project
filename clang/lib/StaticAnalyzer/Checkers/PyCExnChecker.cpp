@@ -27,9 +27,9 @@ struct PyMethodDef {
   const StringLiteral *ml_name;
   const FunctionDecl *ml_meth;
   const IntegerLiteral *ml_flags;
-  const StringRef ml_doc;
+  StringRef ml_doc;
 
-  PyMethodDef() : ml_name(NULL), ml_meth(NULL), ml_flags(NULL), ml_doc(NULL) {}
+  PyMethodDef() : ml_name(NULL), ml_meth(NULL), ml_flags(NULL), ml_doc("") {}
 };
 
 typedef std::vector<PyMethodDef> PyMethVec;
@@ -140,7 +140,7 @@ public:
     }
     if (const DeclRefExpr *RE = dyn_cast<DeclRefExpr>(ml_doc_stmt)) {
       const ValueDecl *VD = RE->getDecl();
-      pymeth.ml_doc = VD->getNameAsString();
+      pymeth.ml_doc = VD->getName();
     }
 
     return pymeth;
