@@ -27,7 +27,7 @@ struct PyMethodDef {
   const StringLiteral *ml_name;
   const FunctionDecl *ml_meth;
   const IntegerLiteral *ml_flags;
-  const StringLiteral *ml_doc;
+  const StringRef ml_doc;
 
   PyMethodDef() : ml_name(NULL), ml_meth(NULL), ml_flags(NULL), ml_doc(NULL) {}
 };
@@ -53,7 +53,7 @@ static void dbpPyMethodDef(PyMethodDef p, BugReporter &BR) {
 
   dbp << p.ml_flags->getValue().getZExtValue() << ", ";
 
-  dbp << p.ml_doc->getString() << "\n";
+  dbp << p.ml_doc << "\n";
 }
 
 class PyCMethodFinder : public Checker<check::ASTDecl<TranslationUnitDecl>> {
@@ -136,7 +136,11 @@ public:
 
     const Stmt *ml_doc_stmt = VisitChild(*++I);
     if (const StringLiteral *SL = dyn_cast<StringLiteral>(ml_doc_stmt)) {
-      pymeth.ml_doc = SL;
+      pymeth.ml_doc = SL->getString();
+    }
+    if (const DeclRefExpr *RE = dyn_cast<DeclRefExpr>(ml_doc_stmt)) {
+      const ValueDecl *VD = RE->getDecl();
+      pymeth.ml_doc = VD->getNameAsString();
     }
 
     return pymeth;
@@ -169,6 +173,7 @@ public:
       if (const Expr *InitExpr = VD->getInit()) {
         for (const Stmt *Child : InitExpr->children()) {
           if (Child) {
+            // Child->dump();
             PyMethodDef pymeth = VisitPyMethodDef(Child);
             if (pymeth.ml_name) {
               // dbpPyMethodDef(pymeth, BR);
