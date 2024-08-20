@@ -247,9 +247,10 @@ public:
 REGISTER_MAP_WITH_PROGRAMSTATE(ExnMap, const FunctionDecl *, ExnState)
 
 PyCExnChecker::PyCExnChecker()
-    : RaiseFNs({"PyErr_SetString", "PyErr_SetObject"}),
-      ClearFNs({"PyErr_Clear"}), CleanupFNs({"Py_DECREF"}),
-      ImplicitRaiseFNs({"PyArg_ParseTuple"}) {
+    : RaiseFNs({"PyErr_SetString", "PyErr_SetObject", "PyErr_SetNone",
+                "PyErr_NoMemory"}),
+      ClearFNs({"PyErr_Clear"}), CleanupFNs({"Py_DECREF", "Py_INCREF"}),
+      ImplicitRaiseFNs({"PyObject_New"}) {
   UncaughtExnBugType.reset(
       new BugType(this, "Uncaught Exception", "Python/C Exception Error"));
 }
@@ -283,10 +284,11 @@ void PyCExnChecker::checkPostCall(const CallEvent &Call,
   // Get the called Python/C API.
   if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(Call.getDecl())) {
     if (IdentifierInfo *II = FD->getIdentifier()) {
-      dbp << II->getName() << "\n";
       // Get the function that calls the Python/C API.
       const StackFrameContext *SFC = C.getStackFrame();
       const FunctionDecl *CallerFD = SFC->getDecl()->getAsFunction();
+      dbp << "Python/C API " << II->getName() << " is called in "
+          << CallerFD->getIdentifier()->getName() << "\n";
 
       ProgramStateRef State = C.getState();
       const ExnState *ES = State->get<ExnMap>(CallerFD);
@@ -296,6 +298,7 @@ void PyCExnChecker::checkPostCall(const CallEvent &Call,
       } else if (ImplicitRaiseFNs.find(II->getName().str()) !=
                  ImplicitRaiseFNs.end()) {
         if (ES && ES->hasExn()) {
+          dbp << "reportUnexpectedControlFlow\n";
           reportUnexpectedControlFlow(FD, C);
         }
         dbp << "implicitly raise exn\n";
@@ -306,6 +309,7 @@ void PyCExnChecker::checkPostCall(const CallEvent &Call,
       } else if (CleanupFNs.find(II->getName().str()) == CleanupFNs.end()) {
         // not one of RaiseFNs, ImplicitRaiseFNs, ClearFNs and CleanupFNs
         if (ES && ES->hasExn()) {
+          dbp << "reportUnexpectedControlFlow\n";
           reportUnexpectedControlFlow(FD, C);
         }
       }
@@ -330,17 +334,20 @@ void PyCExnChecker::checkPreStmt(const ReturnStmt *RS,
     if (!ES) {
       // Return NULL when exception state is Unknown.
       // TODO: Modify after initializing foreign function's ExnState with NoExn.
-      reportUncaughtExn(RS, C);
+      // dbp << "reportUncaughtExn\n";
+      // reportUncaughtExn(RS, C);
       return;
     }
     if (ES->hasNoExn()) {
       // Return NULL when exception state is NoExn.
+      dbp << "reportUncaughtExn\n";
       reportUncaughtExn(RS, C);
       return;
     }
   } else {
     if (ES && ES->hasExn()) {
       // Return non-NULL result when exception state is Exn.
+      dbp << "reportResultWhenExn\n";
       reportResultWhenExn(RS, C);
       return;
     }
