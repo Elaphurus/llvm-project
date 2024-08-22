@@ -26,10 +26,10 @@ namespace {
 struct PyMethodDef {
   const StringLiteral *ml_name;
   const FunctionDecl *ml_meth;
-  const IntegerLiteral *ml_flags;
+  int ml_flags;
   StringRef ml_doc;
 
-  PyMethodDef() : ml_name(NULL), ml_meth(NULL), ml_flags(NULL), ml_doc("") {}
+  PyMethodDef() : ml_name(NULL), ml_meth(NULL), ml_flags(-1), ml_doc("") {}
 };
 
 typedef std::vector<PyMethodDef> PyMethVec;
@@ -51,7 +51,7 @@ static void dbpPyMethodDef(PyMethodDef p, BugReporter &BR) {
   SourceLocation Loc = SM.getSpellingLoc(p.ml_meth->getLocation());
   dbp << p.ml_meth->getNameAsString() << "@" << Loc.printToString(SM) << ", ";
 
-  dbp << p.ml_flags->getValue().getZExtValue() << ", ";
+  dbp << p.ml_flags << ", ";
 
   dbp << p.ml_doc << "\n";
 }
@@ -108,6 +108,20 @@ public:
     return S;
   }
 
+  int visitMLFlags(const Stmt *S) const {
+    if (const IntegerLiteral *IL = dyn_cast<IntegerLiteral>(S)) {
+      return IL->getValue().getZExtValue();
+    }
+    if (const BinaryOperator *BO = dyn_cast<BinaryOperator>(S)) {
+      int base = 0;
+      for (const Stmt *child : BO->children()) {
+        base += visitMLFlags(child);
+      }
+      return base;
+    }
+    return -1;
+  }
+
   PyMethodDef VisitPyMethodDef(const Stmt *S) const {
     PyMethodDef pymeth = PyMethodDef();
 
@@ -130,9 +144,7 @@ public:
     }
 
     const Stmt *ml_flags_stmt = VisitChild(*++I);
-    if (const IntegerLiteral *IL = dyn_cast<IntegerLiteral>(ml_flags_stmt)) {
-      pymeth.ml_flags = IL;
-    }
+    pymeth.ml_flags = visitMLFlags(ml_flags_stmt);
 
     const Stmt *ml_doc_stmt = VisitChild(*++I);
     if (const StringLiteral *SL = dyn_cast<StringLiteral>(ml_doc_stmt)) {
@@ -165,9 +177,9 @@ public:
 
     RecordDecl *RD = RT->getDecl();
     if (isPyMethodDef(RD)) {
-      const SourceManager &SM = BR.getSourceManager();
-      SourceLocation Loc = VD->getLocation();
-      dbp << VD->getNameAsString() << "@" << Loc.printToString(SM) << "\n";
+      // const SourceManager &SM = BR.getSourceManager();
+      // SourceLocation Loc = VD->getLocation();
+      // dbp << VD->getNameAsString() << "@" << Loc.printToString(SM) << "\n";
       // VD->getDefinition()->dump();
 
       if (const Expr *InitExpr = VD->getInit()) {
@@ -258,11 +270,11 @@ PyCExnChecker::PyCExnChecker()
 void PyCExnChecker::checkASTDecl(const TranslationUnitDecl *Tud,
                                  AnalysisManager &Mgr, BugReporter &BR) const {
   PyMeths = FindPyCMethod(Tud, Mgr, BR);
-  for (auto I = PyMeths.begin(); I != PyMeths.end(); ++I) {
-    PyMethodDef pymeth = *I;
-    dbpPyMethodDef(pymeth, BR);
-    // TODO: Initialize foreign function's ExnState with NoExn.
-  }
+  // for (auto I = PyMeths.begin(); I != PyMeths.end(); ++I) {
+  //   PyMethodDef pymeth = *I;
+  // dbpPyMethodDef(pymeth, BR);
+  // TODO: Initialize foreign function's ExnState with NoExn.
+  // }
 }
 
 void PyCExnChecker::checkASTCodeBody(const Decl *D, AnalysisManager &Mgr,
@@ -282,40 +294,50 @@ void PyCExnChecker::checkASTCodeBody(const Decl *D, AnalysisManager &Mgr,
 void PyCExnChecker::checkPostCall(const CallEvent &Call,
                                   CheckerContext &C) const {
   // Get the called Python/C API.
-  if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(Call.getDecl())) {
+  if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(Call.getDecl())) {
     if (IdentifierInfo *II = FD->getIdentifier()) {
       // Get the function that calls the Python/C API.
       const StackFrameContext *SFC = C.getStackFrame();
       const FunctionDecl *CallerFD = SFC->getDecl()->getAsFunction();
-      dbp << "Python/C API " << II->getName() << " is called in "
-          << CallerFD->getIdentifier()->getName() << "\n";
+      // dbp << II->getName() << " <- " << CallerFD->getIdentifier()->getName()
+      //     << "\n";
 
       ProgramStateRef State = C.getState();
       const ExnState *ES = State->get<ExnMap>(CallerFD);
       if (RaiseFNs.find(II->getName().str()) != RaiseFNs.end()) {
-        dbp << "raise exn\n";
+        // dbp << "raise exn\n";
         State = State->set<ExnMap>(CallerFD, ExnState::getExn());
       } else if (ImplicitRaiseFNs.find(II->getName().str()) !=
                  ImplicitRaiseFNs.end()) {
         if (ES && ES->hasExn()) {
-          dbp << "reportUnexpectedControlFlow\n";
+          // dbp << "reportUnexpectedControlFlow\n";
           reportUnexpectedControlFlow(FD, C);
         }
-        dbp << "implicitly raise exn\n";
+        // dbp << "implicitly raise exn\n";
         State = State->set<ExnMap>(CallerFD, ExnState::getExn());
       } else if (ClearFNs.find(II->getName().str()) != ClearFNs.end()) {
-        dbp << "clear exn\n";
+        // dbp << "clear exn\n";
         State = State->set<ExnMap>(CallerFD, ExnState::getNoExn());
       } else if (CleanupFNs.find(II->getName().str()) == CleanupFNs.end()) {
         // not one of RaiseFNs, ImplicitRaiseFNs, ClearFNs and CleanupFNs
         if (ES && ES->hasExn()) {
-          dbp << "reportUnexpectedControlFlow\n";
+          // dbp << "reportUnexpectedControlFlow\n";
           reportUnexpectedControlFlow(FD, C);
         }
       }
       C.addTransition(State);
     }
   }
+}
+
+static const Expr *visitChild(const Expr *Eout) {
+  if (const CastExpr *E = dyn_cast<CastExpr>(Eout)) {
+    return visitChild(E->getSubExpr());
+  }
+  if (const ParenExpr *E = dyn_cast<ParenExpr>(Eout)) {
+    return visitChild(E->getSubExpr());
+  }
+  return Eout;
 }
 
 void PyCExnChecker::checkPreStmt(const ReturnStmt *RS,
@@ -329,8 +351,21 @@ void PyCExnChecker::checkPreStmt(const ReturnStmt *RS,
   const FunctionDecl *FD = SFC->getDecl()->getAsFunction();
   ProgramStateRef State = C.getState();
   const ExnState *ES = State->get<ExnMap>(FD);
-  if (RetV.isZeroConstant()) {
-    dbp << "return null in " << FD->getIdentifier()->getName() << "\n";
+  if (RetV.isConstant() &&
+      RetV.getAsInteger()->getExtValue() == -1) {
+    if (!ES) {
+      reportUncaughtExn(RS, C);
+      return;
+    }
+    if (ES->hasNoExn()) {
+      // dbp << "reportUncaughtExn\n";
+      reportUncaughtExn(RS, C);
+      return;
+    }
+  } else if (!std::strcmp(visitChild(E)->getStmtClassName(),
+                          "IntegerLiteral") &&
+             RetV.isZeroConstant()) {
+    // dbp << "return null in " << FD->getIdentifier()->getName() << "\n";
     if (!ES) {
       // Return NULL when exception state is Unknown.
       // TODO: Modify after initializing foreign function's ExnState with NoExn.
@@ -340,14 +375,14 @@ void PyCExnChecker::checkPreStmt(const ReturnStmt *RS,
     }
     if (ES->hasNoExn()) {
       // Return NULL when exception state is NoExn.
-      dbp << "reportUncaughtExn\n";
+      // dbp << "reportUncaughtExn\n";
       reportUncaughtExn(RS, C);
       return;
     }
   } else {
     if (ES && ES->hasExn()) {
       // Return non-NULL result when exception state is Exn.
-      dbp << "reportResultWhenExn\n";
+      // dbp << "reportResultWhenExn\n";
       reportResultWhenExn(RS, C);
       return;
     }
